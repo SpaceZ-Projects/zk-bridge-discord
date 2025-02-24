@@ -102,16 +102,40 @@ class Bridge(commands.Cog):
                     await self.merge_utxos(address[0], amount, txfee)
                     return
                 list_txs = self.storage.get_txs()
-                for data in listunspent:
-                    txid = data['txid']
+                for utxo in listunspent:
+                    txid = utxo['txid']
                     if txid not in list_txs:
                         self.storage.tx(txid)
-                        await self.unhexlify_memo(data)
+                        await self.unhexlify_memo(utxo)
+
+
+    async def merge_utxos(self, address, amount, txfee):
+        memo = "merge"
+        operation, _= await self.commands.SendMemo(address, address, amount, txfee, memo)
+        if operation:
+            transaction_status, _= await self.commands.z_getOperationStatus(operation)
+            transaction_status = json.loads(transaction_status)
+            if isinstance(transaction_status, list) and transaction_status:
+                status = transaction_status[0].get('status')
+                if status == "executing" or status =="success":
+                    await asyncio.sleep(1)
+                    while True:
+                        transaction_result, _= await self.commands.z_getOperationResult(operation)
+                        transaction_result = json.loads(transaction_result)
+                        if isinstance(transaction_result, list) and transaction_result:
+                            status = transaction_result[0].get('status')
+                            result = transaction_result[0].get('result', {})
+                            if status == "failed":
+                                    return
+                            txid = result.get('txid')
+                            self.storage.tx(txid)
+                            return
+                        await asyncio.sleep(2)
 
     
-    async def unhexlify_memo(self, data):
-        memo = data['memo']
-        amount = data['amount']
+    async def unhexlify_memo(self, utxo):
+        memo = utxo['memo']
+        amount = utxo['amount']
         timestamp = int(datetime.now().timestamp())
         try:
             decoded_memo = binascii.unhexlify(memo)
@@ -134,28 +158,28 @@ class Bridge(commands.Cog):
 
 
     async def get_message(self, form, amount, timestamp):
-        id = form.get('id')
+        contact_id = form.get('id')
         author = form.get('username')
         message = form.get('text')
-        contact_username = self.storage.get_contact_username(id)
+        contact_username = self.storage.get_contact_username(contact_id)
         if not contact_username:
             return
         if author != contact_username:
-            self.storage.update_contact_username(author, id)
+            self.storage.update_contact_username(author, contact_id)
         redirect_message = await self.redirect_message_to_channel(author, message, amount)
         if redirect_message:
-            self.storage.message(id, author, message, amount, redirect_message, timestamp)
+            self.storage.message(contact_id, author, message, amount, redirect_message, timestamp)
 
     
     async def get_request(self, form):
         category = form.get('category')
-        id = form.get('id')
+        contact_id = form.get('id')
         username = form.get('username')
         address = form.get('address')
         banned = self.storage.get_banned()
         if address in banned:
             return
-        self.storage.add_pending(category, id, username, address)
+        self.storage.add_pending(category, contact_id, username, address)
 
 
     async def redirect_message_to_channel(self, author, new_message, amount):
@@ -166,7 +190,7 @@ class Bridge(commands.Cog):
                 message_form = f"**{author} :** {new_message}"
                 if amount > 0.0001:
                     gift = float(amount) - 0.0001
-                    message_form += f"\n:gift:**Gift :** {gift}"
+                    message_form += f"\n:gift:__Gift :__ {gift}"
                 message = await chat.send(message_form)
                 return message.id
             except NotFound:
@@ -183,23 +207,25 @@ class Bridge(commands.Cog):
         if pending_list:
             for contact in pending_list:
                 category = contact[0]
-                id = contact[1]
+                contact_id = contact[1]
                 username = contact[2]
                 address = contact[3]
 
-                await self.send_identity(category, id, username, address)
+                await self.send_identity(category, contact_id, username, address)
 
 
-    async def send_identity(self, category, id, username, toaddress):
+    async def send_identity(self, category, contact_id, username, toaddress):
         amount = 0.0001
         txfee = 0.0001
-        group_category, group_id, group_username, group_address = self.storage.get_identity()
+        group_category, group_username, group_address = self.storage.get_identity()
+        group_id = self.utils.generate_id()
         memo = {"type":"identity","category":group_category,"id":group_id,"username":group_username,"address":group_address}
         memo_str = json.dumps(memo)
         await self.send_identity_memo(
             category,
-            id,
+            contact_id,
             username,
+            group_id,
             group_address,
             toaddress,
             amount,
@@ -208,8 +234,8 @@ class Bridge(commands.Cog):
         )
 
 
-    async def send_identity_memo(self, category, id, username, address, toaddress, amount, txfee, memo):
-        operation, _= await self.commands.SendMemo(address, toaddress, amount, txfee, memo)
+    async def send_identity_memo(self, category, contact_id, username, group_id, group_address, toaddress, amount, txfee, memo):
+        operation, _= await self.commands.SendMemo(group_address, toaddress, amount, txfee, memo)
         if operation:
             transaction_status, _= await self.commands.z_getOperationStatus(operation)
             transaction_status = json.loads(transaction_status)
@@ -228,7 +254,7 @@ class Bridge(commands.Cog):
                             txid = result.get('txid')
                             self.storage.tx(txid)
                             self.storage.delete_pending(toaddress)
-                            self.storage.add_contact(category, id, username, toaddress)
+                            self.storage.add_contact(category, group_id, contact_id, username, toaddress)
                             await self.send_note_to_channel(username)
                             return
                         await asyncio.sleep(2)
@@ -260,58 +286,38 @@ class Bridge(commands.Cog):
                 message= data[2]
                 message_id= data[4]
                 for contact_data in contacts_list:
-                    contact_id = contact_data[1]
-                    address = contact_data[3]
+                    group_id = contact_data[1]
+                    contact_id = contact_data[2]
+                    address = contact_data[4]
                     if id != contact_id:
-                        self.addresses_list.append(address)
-                await self.redirect_message_to_address(message, author, message_id)
+                        self.addresses_list.append((group_id, address))
+                await self.send_message_memo(message, author, message_id)
                 self.addresses_list = []
             messages_list = None
 
 
-    async def merge_utxos(self, address, amount, txfee):
-        memo = "merge"
-        operation, _= await self.commands.SendMemo(address, address, amount, txfee, memo)
-        if operation:
-            transaction_status, _= await self.commands.z_getOperationStatus(operation)
-            transaction_status = json.loads(transaction_status)
-            if isinstance(transaction_status, list) and transaction_status:
-                status = transaction_status[0].get('status')
-                if status == "executing" or status =="success":
-                    await asyncio.sleep(1)
-                    while True:
-                        transaction_result, _= await self.commands.z_getOperationResult(operation)
-                        transaction_result = json.loads(transaction_result)
-                        if isinstance(transaction_result, list) and transaction_result:
-                            status = transaction_result[0].get('status')
-                            result = transaction_result[0].get('result', {})
-                            if status == "failed":
-                                    return
-                            txid = result.get('txid')
-                            self.storage.tx(txid)
-                            return
-                        await asyncio.sleep(2)
 
-
-
-    async def redirect_message_to_address(self, message, sender_username, message_id):
-        _, group_id, group_username, group_address = self.storage.get_identity()
-        memo = {"type":"message","id":group_id,"username":group_username,"text":f"{sender_username} : {message}"}
-        memo_str = json.dumps(memo)
-        hex_memo = binascii.hexlify(memo_str.encode()).decode()
-        await self.send_message_memo(
-            group_address,
-            hex_memo,
-            message_id
-        )
-
-
-    async def send_message_memo(self, group_address, memo, message_id):
+    async def send_message_memo(self, message, author, message_id):
         amount = 0.0001
         chunk_size = 54
+        _, group_username, group_address = self.storage.get_identity()
         address_chunks = [self.addresses_list[i:i + chunk_size] for i in range(0, len(self.addresses_list), chunk_size)]
         for chunk in address_chunks:
-            transactions = [{"address": address, "amount": amount, "memo": memo} for address in chunk]
+            transactions = []
+            for group_id, address in chunk:
+                memo = {
+                    "type": "message",
+                    "id": group_id,
+                    "username":group_username,
+                    "text": f"{author} : {message}"
+                }
+                memo_str = json.dumps(memo)
+                hex_memo = binascii.hexlify(memo_str.encode()).decode()
+                transactions.append({
+                    "address": address,
+                    "amount": amount,
+                    "memo": hex_memo
+                })
             operation, _ = await self.commands.SendMemoToMany(group_address, transactions)
             if operation:
                 transaction_status, _ = await self.commands.z_getOperationStatus(operation)
@@ -326,6 +332,7 @@ class Bridge(commands.Cog):
                             if isinstance(transaction_result, list) and transaction_result:
                                 status = transaction_result[0].get('status')
                                 result = transaction_result[0].get('result', {})
+                                print(result)
                                 if status == "failed":
                                     return
                                 txid = result.get('txid')

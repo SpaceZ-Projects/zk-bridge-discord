@@ -86,12 +86,11 @@ class AdminCMD(commands.Cog):
                 embed = self.embed("Channel Setup", "Error : ",error)
                 await ctx.followup.send(embed=embed)
                 return
-            id = self.utils.generate_id()
             if messages_address:
                 prv_key, _= await self.commands.z_ExportKey(messages_address)
                 if prv_key:
                     self.storage.key(prv_key)
-                self.storage.identity(category, id, username, messages_address, channel.id)
+                self.storage.identity(category, username, messages_address, channel.id)
                 embed = self.embed("ZKGroup", "Contact Address :", f"```{messages_address}```\n[Github](https://github.com/SpaceZ-Projects/zk-bridge-discord)")
                 await ctx.followup.send(embed=embed)
                 message = await channel.send(embed=embed)
@@ -267,15 +266,15 @@ class AdminCMD(commands.Cog):
                             txid = result.get('txid')
                             self.storage.tx(txid)
                             embed = self.embed("Transaction Success", "transaction ID :", txid)
-                            await ctx.edit_original_response(embed=embed)
+                            await ctx.response.send_message(embed=embed, ephemeral=True)
                             return
                         await asyncio.sleep(3)
                 else:
                     embed = self.embed("Transaction Success", "Error :", "transaction failed !")
-                    await ctx.edit_original_response(embed=embed)
+                    await ctx.response.send_message(embed=embed, ephemeral=True)
         else:
             embed = self.embed("Transaction Success", "Error :", "transaction failed !")
-            await ctx.edit_original_response(embed=embed)
+            await ctx.response.send_message(embed=embed, ephemeral=True)
     
 
     

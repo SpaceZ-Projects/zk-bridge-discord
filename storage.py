@@ -13,16 +13,16 @@ class Storage():
             return False
         return True
 
-    def identity(self, category, id, username, address, channel_id):
+    def identity(self, category, username, address, channel_id):
         self.create_identity_table()
         conn = sqlite3.connect(group_data)
         cursor = conn.cursor()
         cursor.execute(
             '''
-            INSERT INTO identity (category, id, username, address, channel)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO identity (category, username, address, channel)
+            VALUES (?, ?, ?, ?)
             ''', 
-            (category, id, username, address, channel_id)
+            (category, username, address, channel_id)
         )
         conn.commit()
         conn.close()
@@ -58,16 +58,16 @@ class Storage():
         conn.close()
 
 
-    def add_contact(self, category, id, username, address):
+    def add_contact(self, category, id, contact_id, username, address):
         self.create_contacts_table()
         conn = sqlite3.connect(group_data)
         cursor = conn.cursor()
         cursor.execute(
             '''
-            INSERT INTO contacts (category, id, username, address)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO contacts (category, id, contact_id, username, address)
+            VALUES (?, ?, ?, ?, ?)
             ''',
-            (category, id, username, address)
+            (category, id, contact_id, username, address)
         )
         conn.commit()
         conn.close()
@@ -136,22 +136,7 @@ class Storage():
         try:
             conn = sqlite3.connect(group_data)
             cursor = conn.cursor()
-            if option == "category":
-                cursor.execute(
-                    "SELECT category FROM identity"
-                )
-                result = cursor.fetchone()
-            elif option == "id":
-                cursor.execute(
-                    "SELECT id FROM identity"
-                )
-                result = cursor.fetchone()
-            elif option == "username":
-                cursor.execute(
-                    "SELECT username FROM identity"
-                )
-                result = cursor.fetchone()
-            elif option == "address":
+            if option == "address":
                 cursor.execute(
                     "SELECT address FROM identity"
                 )
@@ -163,7 +148,7 @@ class Storage():
                 result = cursor.fetchone()
             elif option is None:
                 cursor.execute(
-                    "SELECT category, id, username, address FROM identity"
+                    "SELECT category, username, address FROM identity"
                 )
                 result = cursor.fetchone()
             conn.close()
@@ -176,28 +161,21 @@ class Storage():
         try:
             conn = sqlite3.connect(group_data)
             cursor = conn.cursor()
-            if option == "address":
-                cursor.execute('SELECT address FROM contacts')
-                contacts = [row[0] for row in cursor.fetchall()]
-            elif option == "id":
-                cursor.execute('SELECT id FROM contacts')
-                contacts = [row[0] for row in cursor.fetchall()]
-            elif option is None:
-                cursor.execute('SELECT * FROM contacts')
-                contacts = cursor.fetchall()
+            cursor.execute('SELECT * FROM contacts')
+            contacts = cursor.fetchall()
             conn.close()
             return contacts
         except sqlite3.OperationalError:
             return []
         
 
-    def get_contact_username(self, user_id):
+    def get_contact_username(self, contact_id):
         try:
             conn = sqlite3.connect(group_data)
             cursor = conn.cursor()
             cursor.execute(
-                'SELECT username FROM contacts WHERE id = ?',
-                (user_id,)
+                'SELECT username FROM contacts WHERE contact_id = ?',
+                (contact_id,)
             )
             contact = cursor.fetchone()
             conn.close()
@@ -304,15 +282,15 @@ class Storage():
         conn.close()
 
 
-    def update_contact_username(self, username, user_id):
+    def update_contact_username(self, username, contact_id):
         conn = sqlite3.connect(group_data)
         cursor = conn.cursor()
         cursor.execute(
             '''
             UPDATE contacts
             SET username = ?
-            WHERE id = ?
-            ''', (username, user_id)
+            WHERE contact_id = ?
+            ''', (username, contact_id)
         )
         conn.commit()
         conn.close()
@@ -341,7 +319,6 @@ class Storage():
             '''
             CREATE TABLE IF NOT EXISTS identity (
                 category TEXT,
-                id TEXT,
                 username TEXT,
                 address TEXT,
                 channel INTEGER
@@ -388,6 +365,7 @@ class Storage():
             CREATE TABLE IF NOT EXISTS contacts (
                 category TEXT,
                 id TEXT,
+                contact_id TEXT,
                 username TEXT,
                 address TEXT
             )
