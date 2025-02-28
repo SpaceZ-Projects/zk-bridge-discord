@@ -346,7 +346,7 @@ class Bridge(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: Message):
         if message.guild:
-            if message.author.bot:
+            if message.author.id == self.client.user.id:
                 return
             
             timestamp = int(datetime.now().timestamp())
