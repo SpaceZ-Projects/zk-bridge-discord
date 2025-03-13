@@ -1,6 +1,5 @@
 
 import asyncio
-from datetime import datetime
 import binascii
 import json
 import re
@@ -27,6 +26,7 @@ class Bridge(commands.Cog):
 
         self.is_running = None
         self.addresses_list = []
+        self.processed_timestamps = set()
 
     bridge = Group(name="bridge", description="Admin Commands", default_permissions=Permissions(administrator=True), guild_only=True)
 
@@ -80,7 +80,6 @@ class Bridge(commands.Cog):
                 for data in listunspent:
                     txid = data['txid']
                     if txid not in list_txs:
-                        self.storage.tx(txid)
                         await self.unhexlify_memo(data)
 
                 self.waiting_new_memos.start()
@@ -100,12 +99,10 @@ class Bridge(commands.Cog):
                     txfee = 0.0001
                     amount = float(total_balance) - txfee
                     await self.merge_utxos(address[0], amount, txfee)
-                    return
                 list_txs = self.storage.get_txs()
                 for utxo in listunspent:
                     txid = utxo['txid']
                     if txid not in list_txs:
-                        self.storage.tx(txid)
                         await self.unhexlify_memo(utxo)
 
 
@@ -136,7 +133,7 @@ class Bridge(commands.Cog):
     async def unhexlify_memo(self, utxo):
         memo = utxo['memo']
         amount = utxo['amount']
-        timestamp = int(datetime.now().timestamp())
+        txid = utxo['txid']
         try:
             decoded_memo = binascii.unhexlify(memo)
             form = decoded_memo.decode('utf-8')
@@ -145,25 +142,29 @@ class Bridge(commands.Cog):
             form_type = form_dict.get('type')
 
             if form_type == "message":
-                await self.get_message(form_dict, amount, timestamp)
+                await self.get_message(form_dict, amount)
+                self.storage.tx(txid)
             elif form_type == "request":
                 await self.get_request(form_dict)
+                self.storage.tx(txid)
 
+        except (binascii.Error, json.decoder.JSONDecodeError) as e:
+            self.storage.tx(txid)
+            print(f"Received new transaction. Amount: {amount}")
         except Exception as e:
-            print(f"Received new transaction. Amount: {amount}")
-        except binascii.Error as e:
-            print(f"Received new transaction. Amount: {amount}")
-        except json.decoder.JSONDecodeError as e:
+            self.storage.tx(txid)
             print(f"Received new transaction. Amount: {amount}")
 
 
-    async def get_message(self, form, amount, timestamp):
+    async def get_message(self, form, amount):
         contact_id = form.get('id')
         author = form.get('username')
         message = form.get('text')
+        timestamp = await self.get_message_timestamp()
         contact_username = self.storage.get_contact_username(contact_id)
         if not contact_username:
             return
+        self.processed_timestamps.add(timestamp)
         if author != contact_username:
             self.storage.update_contact_username(author, contact_id)
         redirect_message = await self.redirect_message_to_channel(author, message, amount)
@@ -280,6 +281,7 @@ class Bridge(commands.Cog):
         messages_list = self.storage.get_messages()
         contacts_list = self.storage.get_contacts()     
         if messages_list:
+            messages_list.sort(key=lambda x: x[5])
             for data in messages_list:
                 id = data[0]
                 author= data[1]
@@ -293,7 +295,6 @@ class Bridge(commands.Cog):
                         self.addresses_list.append((group_id, address))
                 await self.send_message_memo(message, author, message_id)
                 self.addresses_list = []
-            messages_list = None
 
 
 
@@ -303,13 +304,15 @@ class Bridge(commands.Cog):
         _, group_username, group_address = self.storage.get_identity()
         address_chunks = [self.addresses_list[i:i + chunk_size] for i in range(0, len(self.addresses_list), chunk_size)]
         for chunk in address_chunks:
+            timestamp = await self.get_message_timestamp()
             transactions = []
             for group_id, address in chunk:
                 memo = {
                     "type": "message",
                     "id": group_id,
                     "username":group_username,
-                    "text": f"{author} : {message}"
+                    "text": f"{author} : {message}",
+                    "timestamp":timestamp
                 }
                 memo_str = json.dumps(memo)
                 hex_memo = binascii.hexlify(memo_str.encode()).decode()
@@ -349,7 +352,6 @@ class Bridge(commands.Cog):
             if message.author.id == self.client.user.id:
                 return
             
-            timestamp = int(datetime.now().timestamp())
             amount = 0.0001
             channel_id = self.storage.get_identity("channel")
             
@@ -381,6 +383,7 @@ class Bridge(commands.Cog):
                             chunks.append(chunk)
                         
                         for chunk in chunks:
+                            timestamp = await self.get_message_timestamp()
                             self.storage.message(
                                 message.author.id,
                                 message.author.display_name,
@@ -390,6 +393,7 @@ class Bridge(commands.Cog):
                                 timestamp
                             )
                     else:
+                        timestamp = await self.get_message_timestamp()
                         self.storage.message(
                             message.author.id,
                             message.author.display_name,
@@ -399,6 +403,19 @@ class Bridge(commands.Cog):
                             timestamp
                         )
 
+
+    async def get_message_timestamp(self):
+        blockchaininfo, _ = await self.commands.getBlockchainInfo()
+        if blockchaininfo is not None:
+            if isinstance(blockchaininfo, str):
+                info = json.loads(blockchaininfo)
+                if info is not None:
+                    timestamp = info.get('mediantime')
+                    if timestamp in self.processed_timestamps:
+                        highest_timestamp = max(self.processed_timestamps)
+                        timestamp = highest_timestamp + 1
+                    self.processed_timestamps.add(timestamp)
+                    return timestamp
 
 
     def embed(self, title, field_name, field_value):
